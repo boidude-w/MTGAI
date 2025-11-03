@@ -382,6 +382,9 @@ function offerMulligan(player, mulliganCount = 0) {
     }
     
     if (player === 'player') {
+        // Update UI to show the hand before asking
+        updateUI();
+        
         const keepHand = confirm(
             `Your starting hand:\n${gameState.player.hand.map(c => c.name).join('\n')}\n\n` +
             `Keep this hand? (Mulligan = shuffle back and draw ${7 - mulliganCount - 1} cards)`
@@ -583,18 +586,18 @@ function startPlayerTurn() {
         card.tapped = false;
         card.sickness = false;
     });
-    
-// Calculate available mana from untapped lands
-gameState.player.mana = calculateAvailableMana('player');
 
-// Draw card (skip first turn for player going first)
-if (gameState.turn > 1) {
-    drawCardFromLibrary('player');
+    // Calculate available mana from untapped lands
+    gameState.player.mana = calculateAvailableMana('player');
+
+    // Draw card (skip first turn for player going first)
+    if (gameState.turn > 1) {
+        drawCardFromLibrary('player');
     }
     
     addLog(`--- Turn ${gameState.turn}: Your Turn ---`);
     updateTurnIndicator();
-    updateUI();
+    updateUI(); // Make sure UI is updated after everything is set
     
     // Enable draw button for beginning phase
     document.getElementById('drawCardBtn').disabled = false;
@@ -1084,6 +1087,9 @@ function endGame(result, reason) {
 
 // Update UI
 function updateUI() {
+    // Debug: Log hand state
+    console.log('Updating UI - Player hand:', gameState.player.hand.length, 'cards');
+    
     // Update life totals
     document.getElementById('playerLife').textContent = gameState.player.life;
     document.getElementById('aiLife').textContent = gameState.ai.life;
@@ -1099,11 +1105,15 @@ function updateUI() {
     // Update hand - FIX: Clear and render cards properly
     const playerHandElement = document.getElementById('playerHand');
     if (playerHandElement) {
+        console.log('Player hand element found, rendering cards...');
         playerHandElement.innerHTML = '';
-        gameState.player.hand.forEach(card => {
+        gameState.player.hand.forEach((card, index) => {
+            console.log(`Rendering card ${index + 1}:`, card.name);
             const cardElement = createHandCardElement(card);
             playerHandElement.appendChild(cardElement);
         });
+    } else {
+        console.error('Player hand element not found!');
     }
     
     // Update AI hand count (don't show actual cards)
