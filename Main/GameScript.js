@@ -81,6 +81,126 @@ function setupEventListeners() {
     });
 }
 
+// ...existing code...
+
+// Add after setupEventListeners function (around line 80)
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        // Ignore if typing in input field
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            return;
+        }
+
+        // Close modals/context menus with Escape
+        if (e.key === 'Escape') {
+            hideContextWheel();
+            document.getElementById('cardModal').style.display = 'none';
+            document.getElementById('menuModal').style.display = 'none';
+            const analysisModal = document.querySelector('.card-analysis-modal');
+            if (analysisModal) analysisModal.remove();
+            const graveyardModal = document.querySelector('.graveyard-modal');
+            if (graveyardModal) graveyardModal.remove();
+            return;
+        }
+
+        // Don't process other keys if game hasn't started
+        if (!gameState.gameStarted) return;
+
+        // Handle keybinds
+        switch(e.key.toLowerCase()) {
+            case ' ':
+            case 'spacebar':
+                e.preventDefault();
+                if (gameState.currentPlayer === 'player') {
+                    endTurn();
+                }
+                break;
+
+            case 'p':
+                if (gameState.currentPlayer === 'player') {
+                    passPriority();
+                }
+                break;
+
+            case 'd':
+                const drawBtn = document.getElementById('drawCardBtn');
+                if (!drawBtn.disabled) {
+                    drawCard();
+                }
+                break;
+
+            case 'm':
+                document.getElementById('menuModal').style.display = 'flex';
+                break;
+
+            case 'g':
+                if (e.shiftKey) {
+                    viewGraveyard('ai');
+                } else {
+                    viewGraveyard('player');
+                }
+                break;
+
+            case 't':
+                if (currentContextCard && currentContextPlayer === 'player') {
+                    toggleCardTap(currentContextCard, 'player');
+                }
+                break;
+
+            case 'a':
+                if (currentContextCard && currentContextPlayer === 'player' && 
+                    currentContextCard.type.includes('Creature')) {
+                    attackWithCreature(currentContextCard, 'player');
+                }
+                break;
+
+            case 'e':
+                if (currentContextCard && currentContextPlayer === 'player') {
+                    const abilities = cardAbilitiesSystem.parseCardAbilities(currentContextCard);
+                    const activatedAbilities = abilities.filter(a => a.trigger === 'activated');
+                    if (activatedAbilities.length > 0) {
+                        showCardAbilitiesMenu(currentContextCard, 'player');
+                    }
+                }
+                break;
+
+            // Number keys 1-9 to play cards from hand
+            case '1': case '2': case '3': case '4': case '5':
+            case '6': case '7': case '8': case '9':
+                if (gameState.currentPlayer === 'player') {
+                    const cardIndex = parseInt(e.key) - 1;
+                    const card = gameState.player.hand[cardIndex];
+                    if (card) {
+                        if (card.type.includes('Land') || 
+                            gameState.phase === 'main1' || 
+                            gameState.phase === 'main2') {
+                            playCard(card, 'player');
+                            addLog(`Played ${card.name} using hotkey ${e.key}`);
+                        } else {
+                            addLog('Can only play non-land cards during main phase');
+                        }
+                    }
+                }
+                break;
+        }
+    });
+
+    // Add visual indicators for keybinds
+    addLog('💡 Keybinds: Space=End Turn | P=Pass | D=Draw | M=Menu | G=Graveyard | 1-9=Play Card');
+}
+
+// ...existing code...
+
+// Update the initialize function to include keyboard shortcuts
+function initialize() {
+    loadDecks();
+    setupEventListeners();
+    setupCardPreview();
+    setupKeyboardShortcuts(); // Add this line
+    
+    console.log('MTG AI Game initialized with CardAbilities system');
+}
+
 // Load user's saved decks
 function loadUserDecks() {
     const currentUser = JSON.parse(localStorage.getItem('currentUser'));
@@ -957,38 +1077,48 @@ function endGame(result, reason) {
     }, 500);
 }
 
+// ...existing code...
+
 // Update UI
 function updateUI() {
-    // Update player stats (show available mana, not total)
+    // Update life totals
     document.getElementById('playerLife').textContent = gameState.player.life;
-    document.getElementById('playerLibrary').textContent = gameState.player.library.length;
-    const playerAvailableMana = calculateAvailableMana('player');
-    document.getElementById('playerMana').textContent = playerAvailableMana;
-    document.getElementById('playerMaxMana').textContent = gameState.player.maxMana;
-    
-    // Update AI stats
     document.getElementById('aiLife').textContent = gameState.ai.life;
-    document.getElementById('aiLibrary').textContent = gameState.ai.library.length;
-    document.getElementById('aiHandCount').textContent = gameState.ai.hand.length;
     
-    // Update life bars
-    const playerLifePercent = (gameState.player.life / 20) * 100;
-    const aiLifePercent = (gameState.ai.life / 20) * 100;
+    // Update mana
+    document.getElementById('playerMana').textContent = gameState.player.mana;
+    document.getElementById('aiMana').textContent = gameState.ai.mana;
     
-    document.getElementById('playerLifeBar').style.width = `${Math.max(0, playerLifePercent)}%`;
-    document.getElementById('aiLifeBar').style.width = `${Math.max(0, aiLifePercent)}%`;
+    // Update deck counts
+    document.getElementById('playerDeckCount').textContent = gameState.player.library.length;
+    document.getElementById('aiDeckCount').textContent = gameState.ai.library.length;
     
-    // Update player hand
-    displayHand();
-
+    // Update hand - FIX: Clear and render cards properly
+    const playerHandElement = document.getElementById('playerHand');
+    if (playerHandElement) {
+        playerHandElement.innerHTML = '';
+        gameState.player.hand.forEach(card => {
+            const cardElement = createHandCardElement(card);
+            playerHandElement.appendChild(cardElement);
+        });
+    }
+    
+    // Update AI hand count (don't show actual cards)
+    const aiHandElement = document.getElementById('aiHand');
+    if (aiHandElement) {
+        aiHandElement.textContent = `AI Hand: ${gameState.ai.hand.length} cards`;
+    }
+    
     // Update battlefields
     displayBattlefield('player');
     displayBattlefield('ai');
     
-    // Update graveyard counts
+    // Update graveyards
     document.getElementById('playerGraveyardCount').textContent = gameState.player.graveyard.length;
     document.getElementById('aiGraveyardCount').textContent = gameState.ai.graveyard.length;
 }
+
+// ...existing code...
 
 // Display player's hand
 function displayHand() {
@@ -1586,33 +1716,37 @@ function resetToSetup() {
 
 function showRules() {
     alert(`
-MTG AI Battle - Basic Rules
+MTG AI - Game Rules
 
-OBJECTIVE:
-Reduce your opponent's life to 0 to win!
+TURN STRUCTURE:
+1. Beginning Phase - Draw a card
+2. Main Phase 1 - Play lands and spells
+3. Combat Phase - Attack with creatures
+4. Main Phase 2 - Play more spells
+5. End Phase - Pass turn
 
-HOW TO PLAY:
-1. Play lands to generate mana
-2. Use mana to cast spells and creatures
-3. Attack with creatures during combat phase
-4. Use instants and abilities strategically
+KEYBOARD SHORTCUTS:
+• Space - End Turn
+• P - Pass Priority
+• D - Draw Card
+• M - Open Menu
+• G - View Your Graveyard
+• Shift+G - View Opponent's Graveyard
+• 1-9 - Play card from hand (by position)
+• T - Tap/Untap selected card
+• A - Attack with selected creature
+• E - Use card ability
+• Escape - Close modals
 
-PHASES:
-• Beginning Phase - Untap, draw a card
-• Main Phase 1 - Play lands, cast spells
-• Combat Phase - Declare attackers
-• Main Phase 2 - Play more spells
-• End Phase - Clean up, discard if needed
+BASIC RULES:
+• Play one land per turn
+• Tap lands for mana to cast spells
+• Creatures have summoning sickness (can't attack first turn)
+• Deal combat damage to reduce opponent's life to 0
 
-TIPS:
-• You can play 1 land per turn
-• Creatures have summoning sickness (can't attack the turn they're played)
-• Tap lands for mana by clicking them
-• Right-click cards to see details
-• Plan your mana curve carefully!
-
-Good luck!
+Right-click creatures for more options!
     `);
+    closeMenu();
 }
 
 // After combat attackers are declared
