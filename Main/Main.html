@@ -68,9 +68,12 @@
             <div class="opponent-area">
                 <div class="player-info opponent-info">
                     <div class="player-stats">
-                        <div class="stat-item">
+                        <div class="stat-item life-stat">
                             <span class="stat-label">❤️</span>
-                            <span class="stat-value" id="aiLife">20</span>
+                            <span class="stat-value life-value" id="aiLife">20</span>
+                            <div class="life-bar">
+                                <div class="life-bar-fill" id="aiLifeBar" style="width: 100%"></div>
+                            </div>
                         </div>
                         <div class="stat-item">
                             <span class="stat-label">📚</span>
@@ -135,6 +138,24 @@
                     <button class="btn-action" id="passBtn">⏸️ Pass Priority</button>
                 </div>
             </div>
+
+            <!-- The Stack -->
+            <div class="battlefield-section">
+                <h3>The Stack</h3>
+                <div id="stackContainer" class="stack-display">
+                    <!-- Stack items appear here -->
+                </div>
+            </div>
+
+            <!-- Graveyard Buttons -->
+            <div class="graveyard-buttons">
+                <button class="btn-graveyard" onclick="viewGraveyard('player')">
+                    🪦 Your Graveyard (<span id="playerGraveyardCount">0</span>)
+                </button>
+                <button class="btn-graveyard" onclick="viewGraveyard('ai')">
+                    🪦 AI Graveyard (<span id="aiGraveyardCount">0</span>)
+                </button>
+            </div>
         </div>
 
         <!-- Card Detail Modal -->
@@ -183,6 +204,6 @@
 
     <script src="CardAbilities.js"></script>
     <script src="AI.js"></script>
-    <script src="script.js"></script>
+    <script src="GameScript.js"></script>
 </body>
 </html>

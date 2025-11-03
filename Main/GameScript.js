@@ -191,6 +191,128 @@ function startGame() {
     startPlayerTurn();
 }
 
+function startGame() {
+    // Get selected deck
+    const selectedDeck = document.querySelector('.deck-option.selected');
+    if (!selectedDeck) {
+        alert('Please select a deck!');
+        return;
+    }
+    
+    const deckName = selectedDeck.dataset.deckName;
+    
+    // Get difficulty
+    const difficulty = document.querySelector('input[name="difficulty"]:checked').value;
+    gameState.difficulty = difficulty;
+    
+    // Load player's deck
+    const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+    const userId = currentUser ? currentUser.id : 'guest';
+    const decks = JSON.parse(localStorage.getItem('mtgDecks')) || {};
+    const userDecks = decks[userId] || [];
+    const playerDeck = userDecks.find(d => d.name === deckName);
+    
+    if (!playerDeck || !playerDeck.cards || playerDeck.cards.length === 0) {
+        alert('Invalid deck selected!');
+        return;
+    }
+    
+    // Expand deck cards (convert counts to individual cards)
+    gameState.player.library = expandDeck(playerDeck.cards);
+    
+    // Generate AI deck
+    gameState.ai.library = generateAIDeck(difficulty);
+    
+    // Shuffle decks
+    shuffleDeck(gameState.player.library);
+    shuffleDeck(gameState.ai.library);
+    
+    // Draw opening hands
+    for (let i = 0; i < 7; i++) {
+        drawCardFromLibrary('player');
+        drawCardFromLibrary('ai');
+    }
+    
+    // Initialize game state
+    gameState.player.life = 20;
+    gameState.ai.life = 20;
+    gameState.turn = 1;
+    gameState.currentPlayer = 'player';
+    gameState.phase = 'beginning';
+    gameState.gameStarted = true;
+    
+    // Hide setup, show game
+    document.getElementById('gameSetup').style.display = 'none';
+    document.getElementById('gameBoard').style.display = 'flex';
+    
+    // Update UI
+    updateUI();
+    addLog('Game started! You go first.');
+    addLog('Draw your opening hand of 7 cards.');
+    
+    // Offer mulligan
+    offerMulligan('player');
+}
+
+function offerMulligan(player, mulliganCount = 0) {
+    if (mulliganCount >= 2) {
+        // Max 2 mulligans
+        startFirstTurn();
+        return;
+    }
+    
+    if (player === 'player') {
+        const keepHand = confirm(
+            `Your starting hand:\n${gameState.player.hand.map(c => c.name).join('\n')}\n\n` +
+            `Keep this hand? (Mulligan = shuffle back and draw ${7 - mulliganCount - 1} cards)`
+        );
+        
+        if (!keepHand) {
+            performMulligan('player', mulliganCount);
+            offerMulligan('player', mulliganCount + 1);
+        } else {
+            // AI decides
+            if (shouldAIMulligan(mulliganCount)) {
+                performMulligan('ai', mulliganCount);
+                addLog('AI took a mulligan');
+            }
+            startFirstTurn();
+        }
+    }
+}
+
+function performMulligan(player, count) {
+    const hand = gameState[player].hand;
+    const library = gameState[player].library;
+    
+    // Shuffle hand back
+    library.push(...hand);
+    shuffleDeck(library);
+    
+    // Draw new hand (7 minus mulligan count)
+    hand.length = 0;
+    for (let i = 0; i < (7 - count - 1); i++) {
+        hand.push(library.pop());
+    }
+    
+    addLog(`${player === 'player' ? 'You' : 'AI'} mulliganed to ${hand.length} cards`);
+}
+
+function shouldAIMulligan(count) {
+    if (count >= 1) return false; // AI only mulligans once
+    
+    const hand = gameState.ai.hand;
+    const landCount = hand.filter(c => c.type.includes('Land')).length;
+    
+    // Mulligan if 0-1 or 6-7 lands
+    return landCount <= 1 || landCount >= 6;
+}
+
+function startFirstTurn() {
+    gameState.turn = 1;
+    startPlayerTurn();
+}
+
 // Expand deck (convert card counts to individual cards)
 function expandDeck(cards) {
     const expanded = [];
@@ -451,12 +573,86 @@ function nextPhase() {
     }
 }
 
-// NEW: Calculate available mana from untapped lands
+
 function calculateAvailableMana(player) {
-    const untappedLands = gameState[player].battlefield.filter(card => 
-        card.type.includes('Land') && !card.tapped
-    );
-    return untappedLands.length;
+    const manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    
+    gameState[player].battlefield.forEach(card => {
+        if (card.type.includes('Land') && !card.tapped) {
+            // Dual lands
+            if (card.text && card.text.includes('Tap: Add')) {
+                const matches = card.text.match(/\{([WUBRGC])\}/g);
+                if (matches) {
+                    matches.forEach(m => {
+                        const color = m.charAt(1);
+                        manaPool[color]++;
+                    });
+                }
+            }
+            // Basic lands
+            else if (card.name.includes('Plains')) manaPool.W++;
+            else if (card.name.includes('Island')) manaPool.U++;
+            else if (card.name.includes('Swamp')) manaPool.B++;
+            else if (card.name.includes('Mountain')) manaPool.R++;
+            else if (card.name.includes('Forest')) manaPool.G++;
+            else manaPool.C++;
+        }
+        
+        // Mana from creatures (like mana dorks)
+        if (card.type.includes('Creature') && !card.tapped && 
+            card.text && card.text.includes('Tap: Add')) {
+            manaPool.G++; // Simplified
+        }
+    });
+    
+    return manaPool;
+}
+
+function canPayManaCost(manaPool, manaCost) {
+    if (!manaCost) return true;
+    
+    const cost = parseManaCost(manaCost);
+    let availableGeneric = 0;
+    
+    // Check colored mana requirements
+    for (const [color, amount] of Object.entries(cost)) {
+        if (color === 'generic') continue;
+        
+        if ((manaPool[color] || 0) < amount) {
+            return false;
+        }
+    }
+    
+    // Calculate available generic mana
+    for (const [color, amount] of Object.entries(manaPool)) {
+        if (!cost[color]) {
+            availableGeneric += amount;
+        } else {
+            availableGeneric += amount - cost[color];
+        }
+    }
+    
+    return availableGeneric >= (cost.generic || 0);
+}
+
+function parseManaCost(manaCost) {
+    const cost = { generic: 0 };
+    
+    if (!manaCost) return cost;
+    
+    const matches = manaCost.match(/\{([^}]+)\}/g) || [];
+    
+    matches.forEach(match => {
+        const symbol = match.replace(/[{}]/g, '');
+        
+        if (/^\d+$/.test(symbol)) {
+            cost.generic += parseInt(symbol);
+        } else {
+            cost[symbol] = (cost[symbol] || 0) + 1;
+        }
+    });
+    
+    return cost;
 }
 
 // NEW: Auto-tap lands to pay for a card
@@ -775,12 +971,23 @@ function updateUI() {
     document.getElementById('aiLibrary').textContent = gameState.ai.library.length;
     document.getElementById('aiHandCount').textContent = gameState.ai.hand.length;
     
+    // Update life bars
+    const playerLifePercent = (gameState.player.life / 20) * 100;
+    const aiLifePercent = (gameState.ai.life / 20) * 100;
+    
+    document.getElementById('playerLifeBar').style.width = `${Math.max(0, playerLifePercent)}%`;
+    document.getElementById('aiLifeBar').style.width = `${Math.max(0, aiLifePercent)}%`;
+    
     // Update player hand
     displayHand();
 
     // Update battlefields
     displayBattlefield('player');
     displayBattlefield('ai');
+    
+    // Update graveyard counts
+    document.getElementById('playerGraveyardCount').textContent = gameState.player.graveyard.length;
+    document.getElementById('aiGraveyardCount').textContent = gameState.ai.graveyard.length;
 }
 
 // Display player's hand
@@ -811,30 +1018,24 @@ function showCardPreview(card, event) {
     clearTimeout(previewTimeout);
     
     previewTimeout = setTimeout(() => {
-        // Update preview content
-        document.getElementById('previewCardName').textContent = card.name;
-        document.getElementById('previewCardType').textContent = card.type;
-        document.getElementById('previewCardCost').textContent = `Mana Cost: ${card.cmc}`;
-        document.getElementById('previewCardText').textContent = card.text || 'No card text available';
+        const preview = document.getElementById('cardPreview');
         
-        if (card.power !== undefined) {
-            document.getElementById('previewCardPower').textContent = `Power/Toughness: ${card.power}/${card.toughness}`;
-            document.getElementById('previewCardPower').style.display = 'block';
-        } else {
-            document.getElementById('previewCardPower').style.display = 'none';
-        }
+        preview.innerHTML = `
+            ${card.imageUrl ? `<img src="${card.imageUrl}" alt="${card.name}">` : ''}
+            <div class="preview-info">
+                <h3>${card.name}</h3>
+                <p class="preview-type">${card.type}</p>
+                <p class="preview-cost">${formatManaCost(card.manaCost || `{${card.cmc}}`)}</p>
+                ${card.power !== undefined ? `
+                    <p class="preview-stats">${card.power}/${card.toughness}</p>
+                ` : ''}
+                <p class="preview-text">${card.text || 'No text'}</p>
+                ${card.tapped ? '<p class="preview-status">⟲ TAPPED</p>' : ''}
+                ${card.sickness ? '<p class="preview-status">😴 SUMMONING SICKNESS</p>' : ''}
+            </div>
+        `;
         
-        // Handle card image
-        const previewImage = document.getElementById('previewCardImage');
-        if (card.imageUrl) {
-            previewImage.src = card.imageUrl;
-            previewImage.style.display = 'block';
-        } else {
-            previewImage.style.display = 'none';
-        }
-        
-        // Show and position preview
-        cardPreview.classList.add('active');
+        preview.classList.add('active');
         updatePreviewPosition(event);
     }, 300); // 300ms delay before showing
 }
@@ -927,7 +1128,7 @@ function showContextWheel(card, player, event) {
     
     // Add attack option for creatures in combat phase
     if (card.type.includes('Creature') && gameState.phase === 'combat' && 
-        gameState.currentPlayer === player && !card.tapped) {
+        gameState.currentPlayer === player && !card.tapped && !card.sickness) {
         options.push({
             icon: '⚔️',
             label: 'Attack',
@@ -968,7 +1169,7 @@ function showContextWheel(card, player, event) {
     
     // Close wheel on click outside
     setTimeout(() => {
-        document.addEventListener('click', hideContextWheel);
+        document.addEventListener('click', hideContextWheel, { once: true });
     }, 100);
 }
 
@@ -1203,7 +1404,9 @@ function createHandCardElement(card) {
         hideCardPreview();
     });
     
-    div.addEventListener('click', () => {
+    // Left-click to play card
+    div.addEventListener('click', (e) => {
+        e.stopPropagation();
         hideCardPreview();
         if (gameState.currentPlayer === 'player') {
             if (card.type.includes('Land') || (gameState.phase === 'main1' || gameState.phase === 'main2')) {
@@ -1214,8 +1417,10 @@ function createHandCardElement(card) {
         }
     });
     
+    // Right-click for context wheel
     div.addEventListener('contextmenu', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         hideCardPreview();
         showContextWheel(card, 'player', e);
     });
@@ -1266,7 +1471,9 @@ function createBattlefieldCardElement(card, player) {
     });
     
     if (player === 'player') {
-        div.addEventListener('click', () => {
+        // Left-click for basic actions
+        div.addEventListener('click', (e) => {
+            e.stopPropagation();
             hideCardPreview();
             if (card.type.includes('Land') && !card.tapped) {
                 tapForMana(card, 'player');
@@ -1278,6 +1485,7 @@ function createBattlefieldCardElement(card, player) {
         // Right-click for context wheel
         div.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             hideCardPreview();
             showContextWheel(card, 'player', e);
         });
@@ -1407,6 +1615,151 @@ Good luck!
     `);
 }
 
+// After combat attackers are declared
+function declareBlockers(attackers) {
+    if (attackers.length === 0) return;
+    
+    const defenders = gameState.ai.battlefield.filter(c => 
+        c.type.includes('Creature') && !c.tapped
+    );
+    
+    if (defenders.length === 0) {
+        // No blockers, resolve damage
+        attackers.forEach(attacker => {
+            const damage = attacker.power || 0;
+            gameState.ai.life -= damage;
+            addLog(`${attacker.name} deals ${damage} damage (unblocked)`);
+        });
+        checkGameOver();
+        return;
+    }
+    
+    // AI assigns blockers
+    attackers.forEach(attacker => {
+        const blocker = selectBlocker(attacker, defenders);
+        if (blocker) {
+            resolveCombat(attacker, blocker);
+            defenders.splice(defenders.indexOf(blocker), 1);
+        } else {
+            const damage = attacker.power || 0;
+            gameState.ai.life -= damage;
+            addLog(`${attacker.name} deals ${damage} damage (unblocked)`);
+        }
+    });
+    
+    checkGameOver();
+}
+
+function selectBlocker(attacker, defenders) {
+    // AI logic: block if defender can survive or trade favorably
+    for (const defender of defenders) {
+        if (defender.toughness >= attacker.power) {
+            return defender;
+        }
+    }
+    return null;
+}
+
+function resolveCombat(attacker, blocker) {
+    const attackerDamage = attacker.power || 0;
+    const blockerDamage = blocker.power || 0;
+    
+    // Check for first strike
+    if (attacker.hasFirstStrike && !blocker.hasFirstStrike) {
+        blocker.toughness -= attackerDamage;
+        if (blocker.toughness <= 0) {
+            moveToGraveyard(blocker, 'ai');
+            addLog(`${attacker.name} destroys ${blocker.name} (first strike)`);
+            return;
+        }
+    }
+    
+    // Normal combat damage
+    attacker.toughness -= blockerDamage;
+    blocker.toughness -= attackerDamage;
+    
+    addLog(`${attacker.name} blocked by ${blocker.name}`);
+    
+    if (attacker.toughness <= 0) {
+        moveToGraveyard(attacker, 'player');
+        addLog(`${attacker.name} died`);
+    }
+    
+    if (blocker.toughness <= 0) {
+        moveToGraveyard(blocker, 'ai');
+        addLog(`${blocker.name} died`);
+    }
+}
+
+function moveToGraveyard(card, owner) {
+    const battlefield = gameState[owner].battlefield;
+    const index = battlefield.indexOf(card);
+    if (index > -1) {
+        battlefield.splice(index, 1);
+        gameState[owner].graveyard.push(card);
+        handleCreatureDeath(card, owner, gameState);
+    }
+}
+
+// Add to gameState object
+const gameStack = [];
+
+function addToStack(spell, owner, targets = []) {
+    const stackItem = {
+        spell: spell,
+        owner: owner,
+        targets: targets,
+        id: generateId()
+    };
+    
+    gameStack.push(stackItem);
+    addLog(`${owner === 'player' ? 'You' : 'AI'} cast ${spell.name}`);
+    updateStackDisplay();
+    
+    // Give opponent chance to respond
+    if (owner === 'player') {
+        promptAIResponse();
+    } else {
+        promptPlayerResponse();
+    }
+}
+
+function resolveStack() {
+    if (gameStack.length === 0) return;
+    
+    // Resolve top of stack (LIFO)
+    const stackItem = gameStack.pop();
+    
+    addLog(`Resolving ${stackItem.spell.name}...`);
+    
+    if (stackItem.spell.type.includes('Instant') || stackItem.spell.type.includes('Sorcery')) {
+        resolveSpell(stackItem.spell, stackItem.owner);
+        gameState[stackItem.owner].graveyard.push(stackItem.spell);
+    }
+    
+    updateStackDisplay();
+    
+    // Continue resolving if more on stack
+    if (gameStack.length > 0) {
+        setTimeout(() => resolveStack(), 500);
+    }
+}
+
+function updateStackDisplay() {
+    // Add visual representation of stack
+    const stackContainer = document.getElementById('stackContainer');
+    if (!stackContainer) return;
+    
+    stackContainer.innerHTML = gameStack.map((item, index) => `
+        <div class="stack-item" style="margin-top: ${index * 10}px">
+            ${item.spell.name} (${item.owner})
+        </div>
+    `).join('');
+}
+
+// Export for other modules
+window.handleCreatureDeath = handleCreatureDeath;
+
 // Export for AI to use
 window.gameState = gameState;
 window.playCard = playCard;
@@ -1415,3 +1768,28 @@ window.attackWithCreature = attackWithCreature;
 window.updateUI = updateUI;
 window.addLog = addLog;
 window.calculateAvailableMana = calculateAvailableMana;
+
+// NEW: View graveyard function
+function viewGraveyard(player) {
+    const graveyard = gameState[player].graveyard;
+    
+    const modal = document.createElement('div');
+    modal.className = 'graveyard-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <span class="close-modal" onclick="this.parentElement.parentElement.remove()">&times;</span>
+            <h2>🪦 ${player === 'player' ? 'Your' : "AI's"} Graveyard</h2>
+            <div class="graveyard-cards">
+                ${graveyard.map(card => `
+                    <div class="graveyard-card">
+                        <div class="card-name">${card.name}</div>
+                        <div class="card-type">${card.type}</div>
+                    </div>
+                `).join('')}
+                ${graveyard.length === 0 ? '<p>No cards in graveyard</p>' : ''}
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+}
